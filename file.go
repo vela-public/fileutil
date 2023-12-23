@@ -5,7 +5,10 @@ import (
 	"bytes"
 	"crypto/tls"
 	"debug/elf"
-	"encoding/json"
+	"fmt"
+	"github.com/vela-public/exception"
+	"github.com/vela-public/sliceutil"
+	"github.com/vela-public/strutil"
 	"io"
 	"io/fs"
 	"net/http"
@@ -15,12 +18,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/asaskevich/govalidator"
-	"github.com/pkg/errors"
-	sliceutil "github.com/projectdiscovery/utils/slice"
-	stringsutil "github.com/projectdiscovery/utils/strings"
-	"gopkg.in/yaml.v3"
 )
 
 // FileExists checks if the file exists in the provided path
@@ -50,8 +47,8 @@ func FileExistsIn(file string, allowedPaths ...string) (string, error) {
 			return "", err
 		}
 		// reject any path that for some reason was cleaned up and starts with .
-		if stringsutil.HasPrefixAny(allowedAbsPath, ".") {
-			return "", errors.New("invalid path")
+		if strutil.HasPrefixAny(allowedAbsPath, ".") {
+			return "", fmt.Errorf("invalid path")
 		}
 
 		allowedDirPath := allowedAbsPath
@@ -62,7 +59,7 @@ func FileExistsIn(file string, allowedPaths ...string) (string, error) {
 			return allowedDirPath, nil
 		}
 	}
-	return "", errors.New("no allowed path found")
+	return "", fmt.Errorf("no allowed path found")
 }
 
 // FolderExists checks if the folder exists
@@ -223,7 +220,7 @@ func ReadFileWithReaderAndBufferSize(r io.Reader, maxCapacity int) (chan string,
 // ReadFile with filename
 func ReadFile(filename string) (chan string, error) {
 	if !FileExists(filename) {
-		return nil, errors.New("file doesn't exist")
+		return nil, fmt.Errorf("file doesn't exist")
 	}
 	out := make(chan string)
 	go func() {
@@ -245,7 +242,7 @@ func ReadFile(filename string) (chan string, error) {
 // ReadFile with filename and specific buffer size
 func ReadFileWithBufferSize(filename string, maxCapacity int) (chan string, error) {
 	if !FileExists(filename) {
-		return nil, errors.New("file doesn't exist")
+		return nil, fmt.Errorf("file doesn't exist")
 	}
 	out := make(chan string)
 	go func() {
@@ -283,7 +280,7 @@ func GetTempFileName() (string, error) {
 // CopyFile from source to destination
 func CopyFileSync(src, dst string) error {
 	if !FileExists(src) {
-		return errors.New("source file doesn't exist")
+		return fmt.Errorf("source file doesn't exist")
 	}
 	srcFile, err := os.Open(src)
 	if err != nil {
@@ -312,64 +309,13 @@ const (
 	JSON
 )
 
-func Unmarshal(encodeType EncodeType, data []byte, obj interface{}) error {
-	switch {
-	case FileExists(string(data)):
-		dataFile, err := os.Open(string(data))
-		if err != nil {
-			return err
-		}
-		defer dataFile.Close()
-		return UnmarshalFromReader(encodeType, dataFile, obj)
-	default:
-		return UnmarshalFromReader(encodeType, bytes.NewReader(data), obj)
-	}
-}
-
-func UnmarshalFromReader(encodeType EncodeType, r io.Reader, obj interface{}) error {
-	switch encodeType {
-	case YAML:
-		return yaml.NewDecoder(r).Decode(obj)
-	case JSON:
-		return json.NewDecoder(r).Decode(obj)
-	default:
-		return errors.New("unsopported encode type")
-	}
-}
-
-func Marshal(encodeType EncodeType, data []byte, obj interface{}) error {
-	isFilePath, _ := govalidator.IsFilePath(string(data))
-	switch {
-	case isFilePath:
-		dataFile, err := os.Create(string(data))
-		if err != nil {
-			return err
-		}
-		defer dataFile.Close()
-		return MarshalToWriter(encodeType, dataFile, obj)
-	default:
-		return MarshalToWriter(encodeType, bytes.NewBuffer(data), obj)
-	}
-}
-
-func MarshalToWriter(encodeType EncodeType, r io.Writer, obj interface{}) error {
-	switch encodeType {
-	case YAML:
-		return yaml.NewEncoder(r).Encode(obj)
-	case JSON:
-		return json.NewEncoder(r).Encode(obj)
-	default:
-		return errors.New("unsopported encode type")
-	}
-}
-
 func ExecutableName() string {
 	executablePath, err := os.Executable()
 	if err == nil {
 		executablePath = os.Args[0]
 	}
 	executableNameWithExt := filepath.Base(executablePath)
-	return stringsutil.TrimSuffixAny(executableNameWithExt, filepath.Ext(executableNameWithExt))
+	return strutil.TrimSuffixAny(executableNameWithExt, filepath.Ext(executableNameWithExt))
 }
 
 // RemoveAll specified paths, returning those that caused error
@@ -399,7 +345,7 @@ func UseMusl(path string) (bool, error) {
 		return false, err
 	}
 	for _, importedLibrary := range importedLibraries {
-		if stringsutil.ContainsAny(importedLibrary, "libc.musl-") {
+		if strutil.ContainsAny(importedLibrary, "libc.musl-") {
 			return true, nil
 		}
 	}
@@ -421,7 +367,7 @@ func HasPermission(fileName string, permission int) (bool, error) {
 	file, err := os.OpenFile(fileName, permission, 0666)
 	if err != nil {
 		if os.IsPermission(err) {
-			return false, errors.Wrap(err, "permission error")
+			return false, exception.New().Try(fileName, fmt.Errorf("permission error %v", err))
 		}
 		return false, err
 	}
@@ -430,7 +376,7 @@ func HasPermission(fileName string, permission int) (bool, error) {
 	return true, nil
 }
 
-var ErrInvalidSeparator = errors.New("invalid separator")
+var ErrInvalidSeparator = fmt.Errorf("invalid separator")
 
 var SkipEmptyLine = func(line []byte) bool {
 	return len(line) > 0
@@ -529,15 +475,15 @@ func FileSizeToByteLen(fileSize string) (int, error) {
 		return size * 1024 * 1024, nil
 	}
 	if len(fileSize) < 3 {
-		return 0, errors.New("invalid size value")
+		return 0, fmt.Errorf("invalid size value")
 	}
 	sizeUnit := fileSize[len(fileSize)-2:]
 	size, err := strconv.Atoi(fileSize[:len(fileSize)-2])
 	if err != nil {
-		return 0, errors.New("parse error: " + err.Error())
+		return 0, fmt.Errorf("parse error: " + err.Error())
 	}
 	if size < 0 {
-		return 0, errors.New("size cannot be negative")
+		return 0, fmt.Errorf("size cannot be negative")
 	}
 	if strings.EqualFold(sizeUnit, "kb") {
 		return size * 1024, nil
@@ -548,7 +494,7 @@ func FileSizeToByteLen(fileSize string) (int, error) {
 	} else if strings.EqualFold(sizeUnit, "tb") {
 		return size * 1024 * 1024 * 1024 * 1024, nil
 	}
-	return 0, errors.New("unsupported size unit")
+	return 0, fmt.Errorf("unsupported size unit")
 }
 
 // OpenOrCreate opens the named file for reading. If successful, methods on
